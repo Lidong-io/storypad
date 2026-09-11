@@ -14,6 +14,8 @@ jobs:
   build-ios:
     name: Build iOS (unsigned)
     runs-on: macos-15
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout code
@@ -47,11 +49,27 @@ jobs:
       # iOS simulator, or re-signed later with your own certificate.
       - name: Build iOS (no codesign)
         run: |
+          set -o pipefail
           flutter build ios --release --no-codesign \
             --flavor community \
             --target=lib/main_community.dart \
             --dart-define=CUPERTINO=yes \
-            --dart-define-from-file=bin/.tmp/private_keys/dart_defines/community.json
+            --dart-define-from-file=bin/.tmp/private_keys/dart_defines/community.json \
+            2>&1 | tee build.log
+
+      # Anonymous clients can't read Actions logs, so publish the tail of a
+      # failed build to the ci-logs branch for debugging.
+      - name: Push build log on failure
+        if: failure()
+        run: |
+          tail -n 400 build.log > ci-error.log || echo 'no log captured' > ci-error.log
+          git config user.name "ci-log-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git checkout --orphan ci-logs
+          git reset --quiet
+          git add ci-error.log
+          git commit --quiet -m "ci: build error log"
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" ci-logs
 
       - name: Package .app bundle
         run: |
