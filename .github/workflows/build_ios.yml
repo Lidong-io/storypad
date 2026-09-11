@@ -58,18 +58,24 @@ jobs:
             2>&1 | tee build.log
 
       # Anonymous clients can't read Actions logs, so publish the tail of a
-      # failed build to the ci-logs branch for debugging.
+      # failed build to the ci-logs branch via the GitHub API (no git needed).
       - name: Push build log on failure
         if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           tail -n 400 build.log > ci-error.log || echo 'no log captured' > ci-error.log
-          git config user.name "ci-log-bot"
-          git config user.email "actions@users.noreply.github.com"
-          git checkout --orphan ci-logs
-          git reset --quiet
-          git add ci-error.log
-          git commit --quiet -m "ci: build error log"
-          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" ci-logs
+          API=https://api.github.com
+          AUTH="Authorization: Bearer $GH_TOKEN"
+          REPO=${{ github.repository }}
+          BASE_SHA=$(curl -sf -H "$AUTH" "$API/repos/$REPO/git/ref/heads/develop" | jq -r .object.sha)
+          echo "base sha: $BASE_SHA"
+          curl -s -H "$AUTH" -X POST "$API/repos/$REPO/git/refs" \
+            -d "{\"ref\":\"refs/heads/ci-logs\",\"sha\":\"$BASE_SHA\"}" || true
+          B64=$(base64 ci-error.log | tr -d '\n')
+          RESP=$(curl -s -w '\nHTTP_%{http_code}' -H "$AUTH" -X PUT "$API/repos/$REPO/contents/ci-error.log" \
+            -d "$(jq -n --arg c "$B64" '{message:"ci: build error log",content:$c,branch:"ci-logs"}')")
+          echo "$RESP"
 
       - name: Package .app bundle
         run: |
