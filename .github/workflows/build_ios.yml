@@ -1,0 +1,69 @@
+name: Build iOS (community)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ develop ]
+    paths:
+      - '.github/workflows/build_ios.yml'
+      - 'lib/**'
+      - 'ios/**'
+      - 'pubspec.yaml'
+
+jobs:
+  build-ios:
+    name: Build iOS (unsigned)
+    runs-on: macos-15
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Read Flutter version from .tool-versions
+        id: flutter-version
+        run: |
+          FLUTTER_VERSION=$(grep flutter .tool-versions | awk '{print $2}' | cut -d'-' -f1)
+          echo "version=$FLUTTER_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ steps.flutter-version.outputs.version }}
+          cache: true
+
+      - name: Generate community dart-defines fallback (same as bin/dev)
+        run: |
+          mkdir -p bin/.tmp/private_keys/dart_defines
+          echo '{}' > bin/.tmp/private_keys/dart_defines/community.json
+
+      - name: Get dependencies
+        run: flutter pub get
+
+      - name: Generate code
+        run: dart run build_runner build --delete-conflicting-outputs
+
+      # No Apple developer account / certificates available, so we build
+      # without code signing. The .app bundle can be installed into an
+      # iOS simulator, or re-signed later with your own certificate.
+      - name: Build iOS (no codesign)
+        run: |
+          flutter build ios --release --no-codesign \
+            --flavor community \
+            --target=lib/main_community.dart \
+            --dart-define=CUPERTINO=yes \
+            --dart-define-from-file=bin/.tmp/private_keys/dart_defines/community.json
+
+      - name: Package .app bundle
+        run: |
+          APP_PATH=$(find build/ios/iphoneos -name "*.app" -type d | head -n 1)
+          echo "Found app: $APP_PATH"
+          mkdir -p build/ios/artifacts
+          cd "$(dirname "$APP_PATH")"
+          zip -qr "${{ github.workspace }}/build/ios/artifacts/storypad-community-unsigned.zip" "$(basename "$APP_PATH")"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: storypad-ios-unsigned
+          path: build/ios/artifacts/*.zip
+          retention-days: 14
